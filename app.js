@@ -4,6 +4,7 @@ const { buildSchema } = require('graphql');
 const { makeExecutableSchema } = require('graphql-tools');
 const { GraphQLDateTime } = require('graphql-iso-date');
 const cors = require('cors');
+const Diacritics = require('diacritic');
 require('isomorphic-fetch');
 
 const api = "https://api.graphql.jobs/";
@@ -16,13 +17,19 @@ const typeDefs = `
   type Job {
     id: ID!
     title: String!
+    commitment: Commitment!
     cities: [City!]
     countries: [Country!]
     description: String
     applyUrl: String
     company: Company
+    isFeatured: Boolean
     userEmail: String
     postedAt: DateTime!
+  }
+
+  type Commitment {
+    title: String!
   }
 
   type City {
@@ -57,27 +64,35 @@ const resolvers = {
           }`
         })
       })
-      .then(async res => res.json())
-      .then(async res => {
-        console.log(res.data);
-        var isCountry = false, isCity = false;
-        var ret = [];
-        for (var i = 0; i < res.data.locations.length; i++) {
-          var location = res.data.locations[i];
-          if (location.type == 'country') {
-            isCountry = true;
-          } else {
-            isCity = true;
-          }
-          await fetch(api, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ query: `
+        .then(async res => res.json())
+        .then(async res => {
+          console.log(res.data);
+          var isCountry = false, isCity = false;
+          var ret = new Map();
+          for (var i = 0; i < res.data.locations.length; i++) {
+            var location = res.data.locations[i];
+            if (location.type == 'country') {
+              isCountry = true;
+            } else {
+              isCity = true;
+            }
+            var normalised = Diacritics.clean(location.name.replace(/\s+/g, '-')).toLowerCase();
+            console.log(normalised);
+            if (normalised == "remote") {
+              continue;
+            }
+            await fetch(api, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ query: `
               query {
-                ${location.type.toLowerCase()}(input: {slug: "${location.name.replace(/\s+/g, '-').toLowerCase()}"}) {
+                ${location.type}(input: {slug: "${normalised}"}) {
                   jobs {
                     id
                     title
+                    commitment {
+                      title
+                    }
                     cities {
                       name
                     }
@@ -92,29 +107,32 @@ const resolvers = {
                       logoUrl
                     }
                     locationNames
+                    isFeatured
                     userEmail
                     postedAt
                   }
                 }
               }`
+              })
             })
-          })
-          .then(res => res.json())
-          .then(res => {
-            var details = [];
-            if (isCountry) {
-              details = res.data.country.jobs;
-            } else {
-              details = res.data.city.jobs;
-            }
-            for (var i = 0; i < details.length; i++) {
-              ret.push(details[i]);
-            }
-          });
-        }
-        console.log(ret);
-        return ret;
-      });
+              .then(res => res.json())
+              .then(res => {
+                var details = [];
+                if (isCountry) {
+                  details = res.data.country.jobs;
+                } else {
+                  if (res.data.city == null)
+                    console.log("city is null");
+                  details = res.data.city.jobs;
+                }
+                for (var i = 0; i < details.length; i++) {
+                  ret.set(details[i].id, details[i]);
+                  console.log(details[i].id);
+                }
+              });
+          }
+          return Array.from(ret.values());
+        });
     }
   },
 
